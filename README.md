@@ -4,8 +4,9 @@ The payment passport for virtual worlds and AI agents — pay inside worlds, let
 agents pay **and earn** under signed mandates their owner controls, and govern
 every cent. All money movement runs on PayPal's APIs in the free Sandbox.
 
-> Status: Phase 1 (rails proof). The mandate engine, agent wallets, console,
-> and WebXR world are built in later phases on top of this foundation.
+> Status: Phase 1 (rails proof) + Phase 2 (trust foundation: signed mandates,
+> hash-chained audit, identity) built and tested. Agent wallets, console, and
+> the WebXR world are built in later phases on top of this foundation.
 
 ## Run the Phase 1 proof
 

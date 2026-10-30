@@ -20,6 +20,7 @@ export function getConfig(env = process.env) {
     clientSecret: env.PAYPAL_CLIENT_SECRET || '',
     baseUrl: (env.PAYPAL_BASE_URL || 'https://api-m.sandbox.paypal.com').replace(/\/$/, ''),
     webhookId: env.PAYPAL_WEBHOOK_ID || '',
+    mandateSecret: env.MANDATE_SIGNING_SECRET || '',
     port: Number(env.PORT || 8080),
   };
 }

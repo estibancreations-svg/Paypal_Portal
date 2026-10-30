@@ -8,9 +8,23 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDotEnv, getConfig, isConfigured } from './config.js';
 import { PayPalClient, firstCapture, approveLink } from './paypal.js';
+import { MandateRegistry } from './mandates.js';
+import { AuditChain } from './audit.js';
+import { IdentityRegistry } from './identity.js';
 
 loadDotEnv();
 const cfg = getConfig();
+const audit = new AuditChain();
+const identity = new IdentityRegistry();
+const mandates = cfg.mandateSecret ? new MandateRegistry(cfg.mandateSecret) : null;
+function mandateRegistry() {
+  if (!mandates) {
+    const err = new Error('MANDATE_SIGNING_SECRET is not configured in the server .env.');
+    err.statusCode = 503;
+    throw err;
+  }
+  return mandates;
+}
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const indexHtml = readFileSync(join(root, 'public', 'index.html'), 'utf8');
 
@@ -102,6 +116,47 @@ const server = createServer(async (req, res) => {
         batchStatus: readBack.batch_header.batch_status,
         senderBatchId: readBack.batch_header.sender_batch_header.sender_batch_id,
       });
+    }
+
+    // ---- Phase 2: identity, mandates, audit ----
+    if (req.method === 'POST' && url.pathname === '/api/agents') {
+      const agent = identity.registerAgent(await jsonBody(req));
+      audit.append({ type: 'agent.registered', agentId: agent.id, ownerId: agent.ownerId });
+      return send(res, 201, agent);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/passports') {
+      const passport = identity.issuePassport(await jsonBody(req));
+      audit.append({ type: 'passport.issued', passportId: passport.id, ownerId: passport.ownerId, tier: passport.tier });
+      return send(res, 201, passport);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/mandates') {
+      const signed = mandateRegistry().issue(await jsonBody(req));
+      audit.append({ type: 'mandate.issued', mandateId: signed.payload.id, ownerId: signed.payload.ownerId, agentId: signed.payload.agentId });
+      return send(res, 201, signed);
+    }
+    const mandateMatch = url.pathname.match(/^\/api\/mandates\/([0-9a-f-]{36})$/);
+    if (req.method === 'GET' && mandateMatch) {
+      const registry = mandateRegistry();
+      const record = registry.get(mandateMatch[1]);
+      if (!record) return send(res, 404, { error: 'mandate not found' });
+      return send(res, 200, { ...record, validation: registry.validate(mandateMatch[1]) });
+    }
+    const revokeMatch = url.pathname.match(/^\/api\/mandates\/([0-9a-f-]{36})\/revoke$/);
+    if (req.method === 'POST' && revokeMatch) {
+      const ok = mandateRegistry().revoke(revokeMatch[1]);
+      if (!ok) return send(res, 404, { error: 'mandate not found' });
+      audit.append({ type: 'mandate.revoked', mandateId: revokeMatch[1] });
+      return send(res, 200, { revoked: true, mandateId: revokeMatch[1] });
+    }
+    const authorizeMatch = url.pathname.match(/^\/api\/mandates\/([0-9a-f-]{36})\/authorize$/);
+    if (req.method === 'POST' && authorizeMatch) {
+      const { proposal, spentTodayCents = 0 } = await jsonBody(req);
+      const result = mandateRegistry().authorize(authorizeMatch[1], proposal, { spentTodayCents });
+      audit.append({ type: result.decision === 'pass' ? 'payment.authorized' : 'payment.blocked', mandateId: authorizeMatch[1], amountCents: proposal?.amountCents, reasons: result.reasons });
+      return send(res, 200, result);
+    }
+    if (req.method === 'GET' && url.pathname === '/api/audit') {
+      return send(res, 200, { verify: audit.verify(), entries: audit.entries });
     }
 
     // Webhook receiver: verify the signature with PayPal before trusting it
