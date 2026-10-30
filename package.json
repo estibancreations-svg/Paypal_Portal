@@ -1,0 +1,14 @@
+{
+  "name": "payportal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PayPortal — the payment passport for virtual worlds and AI agents, on PayPal rails.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "prove": "node scripts/prove-live.js"
+  },
+  "engines": { "node": ">=20" }
+}
