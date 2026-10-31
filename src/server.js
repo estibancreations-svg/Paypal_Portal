@@ -11,6 +11,7 @@ import { PayPalClient, firstCapture, approveLink } from './paypal.js';
 import { MandateRegistry } from './mandates.js';
 import { AuditChain } from './audit.js';
 import { IdentityRegistry } from './identity.js';
+import { WalletEngine } from './wallets.js';
 
 loadDotEnv();
 const cfg = getConfig();
@@ -24,6 +25,15 @@ function mandateRegistry() {
     throw err;
   }
   return mandates;
+}
+const wallets = mandates ? new WalletEngine({ mandates, audit }) : null;
+function walletEngine() {
+  if (!wallets) {
+    const err = new Error('Wallets require MANDATE_SIGNING_SECRET in the server .env.');
+    err.statusCode = 503;
+    throw err;
+  }
+  return wallets;
 }
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const indexHtml = readFileSync(join(root, 'public', 'index.html'), 'utf8');
@@ -157,6 +167,34 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/api/audit') {
       return send(res, 200, { verify: audit.verify(), entries: audit.entries });
+    }
+
+    // ---- Phase 3: agent wallets, jobs, earnings ----
+    if (req.method === 'POST' && url.pathname === '/api/wallets') {
+      const wallet = walletEngine().createWallet(await jsonBody(req));
+      return send(res, 201, wallet);
+    }
+    const walletMatch = url.pathname.match(/^\/api\/wallets\/([0-9a-f-]{36})$/);
+    if (req.method === 'GET' && walletMatch) {
+      const engine = walletEngine();
+      const wallet = engine.getWallet(walletMatch[1]);
+      if (!wallet) return send(res, 404, { error: 'wallet not found' });
+      return send(res, 200, { wallet, pnl: engine.pnl(walletMatch[1]) });
+    }
+    const spendMatch = url.pathname.match(/^\/api\/wallets\/([0-9a-f-]{36})\/spend$/);
+    if (req.method === 'POST' && spendMatch) {
+      const { proposal } = await jsonBody(req);
+      const result = walletEngine().spend(spendMatch[1], proposal);
+      return send(res, 200, result);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/jobs') {
+      const job = walletEngine().createJob(await jsonBody(req));
+      return send(res, 201, job);
+    }
+    const deliverMatch = url.pathname.match(/^\/api\/jobs\/([0-9a-f-]{36})\/verify-delivery$/);
+    if (req.method === 'POST' && deliverMatch) {
+      const result = walletEngine().verifyDelivery(deliverMatch[1]);
+      return send(res, 200, { job: result.job, balanceCents: result.balanceCents, sweep: result.sweep });
     }
 
     // Webhook receiver: verify the signature with PayPal before trusting it
