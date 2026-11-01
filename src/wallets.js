@@ -148,6 +148,14 @@ export class WalletEngine {
     return [...this.holds.values()].filter((h) => h.status === 'PENDING');
   }
 
+  listWallets() {
+    return [...this.wallets.values()].map((wallet) => ({ wallet, pnl: this.pnl(wallet.agentId) }));
+  }
+
+  listJobs() {
+    return [...this.jobs.values()];
+  }
+
   // ---- Earning: jobs are held until delivery is verified ----
   createJob({ agentId, title, amountCents }) {
     if (!this.wallets.has(agentId)) throw new Error('wallet not found for agent');

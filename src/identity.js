@@ -44,4 +44,7 @@ export class IdentityRegistry {
     const agent = this.agents.get(agentId);
     return Boolean(agent && agent.ownerId === ownerId);
   }
+
+  listAgents() { return [...this.agents.values()]; }
+  listPassports() { return [...this.passports.values()]; }
 }

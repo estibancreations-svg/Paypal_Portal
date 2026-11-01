@@ -82,6 +82,10 @@ export class MandateRegistry {
     return this.mandates.get(id) || null;
   }
 
+  list() {
+    return [...this.mandates.values()];
+  }
+
   // The kill switch. Immediate and total: a revoked mandate never validates again.
   revoke(id) {
     const record = this.mandates.get(id);

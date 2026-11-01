@@ -1,0 +1,31 @@
+# PayPortal — Render blueprint.
+# Connecting the back end = create the service from this repo on Render,
+# confirm the env vars below, deploy. The server serves the app and the
+# API together on one origin; no other wiring exists to do.
+services:
+  - type: web
+    name: payportal
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Signs every mandate. Render generates a strong value; never commit one.
+      - key: MANDATE_SIGNING_SECRET
+        generateValue: true
+      - key: PAYPAL_MODE
+        value: sandbox
+      # PayPal Sandbox app credentials — entered in the Render dashboard
+      # (Events/env), never in git. Until set, the app runs fully except
+      # live PayPal captures, which report exactly that.
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: PROOF_RECIPIENT_EMAIL
+        sync: false

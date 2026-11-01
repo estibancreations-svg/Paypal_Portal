@@ -1,78 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PayPortal — Phase 1 Rails Proof</title>
-<style>
-  body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0d1420;color:#e8eef7}
-  .wrap{max-width:760px;margin:0 auto;padding:24px 16px 60px}
-  h1{font-size:22px} .card{background:#131f30;border:1px solid #23405c;border-radius:12px;padding:16px;margin:12px 0}
-  button{background:#2f6690;color:#fff;border:0;border-radius:8px;padding:10px 14px;font-size:15px;cursor:pointer;margin:4px 4px 4px 0}
-  input{background:#0a1a2e;color:#e8eef7;border:1px solid #2b435f;border-radius:8px;padding:9px;width:260px}
-  pre{background:#0a1a2e;border-radius:8px;padding:12px;overflow:auto;font-size:13px;white-space:pre-wrap}
-  .ok{color:#7be495}.warn{color:#ffd97b}
-</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PayPortal — the payment passport for virtual worlds and AI agents</title>
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<div class="wrap">
-<h1>PayPortal — Phase 1 Rails Proof</h1>
-<p>Bare proof that the PayPal Sandbox rails work before anything is built on top: create an order, approve it, capture it, read it back; send one payout, read it back. Sandbox money only — no real funds.</p>
-<p id="health">Checking configuration…</p>
-
-<div class="card">
-<h3>Step 1–2 · Order → approve → capture → read back</h3>
-<label>Amount (USD) <input id="amount" value="10.00"></label>
-<div>
-<button id="createBtn">1 · Create order</button>
-<button id="approveBtn" disabled>2 · Open approval</button>
-<button id="captureBtn" disabled>3 · Capture + read back</button>
+<div id="shell">
+  <aside id="sidebar">
+    <div class="brand"><span class="script">PayPortal</span><span class="tag">PAYMENT PASSPORT</span></div>
+    <nav id="nav"></nav>
+    <div class="sidefoot">
+      <div id="health" class="health">connecting…</div>
+      <a href="/proof.html">Phase 1 rails proof</a>
+    </div>
+  </aside>
+  <main id="main">
+    <header id="topbar">
+      <div class="brand-mini"><span class="script">PayPortal</span></div>
+      <div id="health-mini" class="health"></div>
+    </header>
+    <section id="page"></section>
+  </main>
+  <nav id="bottombar"></nav>
 </div>
-<pre id="orderOut">No order yet.</pre>
-</div>
-
-<div class="card">
-<h3>Step 3 · Payout → read back</h3>
-<label>Recipient (sandbox email) <input id="payoutEmail" placeholder="sb-buyer@example.com"></label><br>
-<label>Amount (USD) <input id="payoutAmount" value="1.00"></label>
-<div><button id="payoutBtn">Send payout + read back</button></div>
-<pre id="payoutOut">No payout yet.</pre>
-</div>
-</div>
-<script>
-let orderId = null, approveUrl = null;
-const out = (id, obj) => { document.getElementById(id).textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
-async function call(path, opts) {
-  const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
-  return data;
-}
-fetch('/api/health').then(r => r.json()).then(h => {
-  document.getElementById('health').innerHTML = h.configured
-    ? '<span class="ok">Configured: Sandbox credentials present (' + h.baseUrl + ')</span>'
-    : '<span class="warn">Not configured yet: add the Sandbox app Client ID and Secret to the server .env, then restart.</span>';
-}).catch(() => {});
-document.getElementById('createBtn').onclick = async () => {
-  try {
-    const d = await call('/api/proof/order', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount: document.getElementById('amount').value }) });
-    orderId = d.orderId; approveUrl = d.approveUrl;
-    out('orderOut', d);
-    document.getElementById('approveBtn').disabled = !approveUrl;
-    document.getElementById('captureBtn').disabled = false;
-  } catch (e) { out('orderOut', 'Error: ' + e.message); }
-};
-document.getElementById('approveBtn').onclick = () => { if (approveUrl) window.open(approveUrl, '_blank'); };
-document.getElementById('captureBtn').onclick = async () => {
-  if (!orderId) return;
-  try { out('orderOut', await call('/api/proof/order/' + orderId + '/capture', { method: 'POST' })); }
-  catch (e) { out('orderOut', 'Error: ' + e.message); }
-};
-document.getElementById('payoutBtn').onclick = async () => {
-  try {
-    out('payoutOut', await call('/api/proof/payout', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ email: document.getElementById('payoutEmail').value, amount: document.getElementById('payoutAmount').value }) }));
-  } catch (e) { out('payoutOut', 'Error: ' + e.message); }
-};
-</script>
+<script src="/app.js"></script>
 </body>
 </html>

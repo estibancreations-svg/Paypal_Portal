@@ -1,10 +1,12 @@
-// PayPortal — Phase 1 bare proof server (zero dependencies, Node http).
-// Purpose: prove the PayPal rails end to end — Orders create/approve/capture,
-// one Payouts batch, webhook signature verification, and read-backs — before
-// any product surface is built on top.
+// PayPortal server (zero dependencies, Node http).
+// Serves the full product: the app (public/) and the API together, same
+// origin. Money movement runs on the PayPal client in src/paypal.js;
+// every other engine (mandates, wallets, risk, guidelines, points hooks,
+// audit) is local and deterministic. Configuration is env-only — see
+// .env.example and docs/api-contract.md.
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
+import { dirname, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDotEnv, getConfig, isConfigured } from './config.js';
 import { PayPalClient, firstCapture, approveLink } from './paypal.js';
@@ -38,7 +40,16 @@ function walletEngine() {
   return wallets;
 }
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const indexHtml = readFileSync(join(root, 'public', 'index.html'), 'utf8');
+let demoSeed = null;
+const publicDir = join(root, 'public');
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
+function serveStatic(res, pathname) {
+  const name = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+  if (name.includes('..')) return send(res, 400, { error: 'bad path' });
+  const file = join(publicDir, name);
+  if (!existsSync(file)) return send(res, 404, { error: 'not found' });
+  return send(res, 200, readFileSync(file, 'utf8'), MIME[extname(file)] || 'application/octet-stream');
+}
 
 let client = null;
 function paypal() {
@@ -67,8 +78,8 @@ async function jsonBody(req) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${cfg.port}`);
   try {
-    if (req.method === 'GET' && url.pathname === '/') {
-      return send(res, 200, indexHtml, 'text/html; charset=utf-8');
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/app.') || url.pathname === '/index.html' || url.pathname === '/proof.html')) {
+      return serveStatic(res, url.pathname);
     }
     if (req.method === 'GET' && url.pathname === '/api/health') {
       return send(res, 200, { ok: true, configured: isConfigured(cfg), baseUrl: cfg.baseUrl });
@@ -78,7 +89,7 @@ const server = createServer(async (req, res) => {
       return send(res, 200,
         `<!doctype html><meta charset="utf-8"><title>PayPortal proof</title>` +
         `<p>${url.pathname === '/return' ? 'Approved.' : 'Cancelled.'} Order: <b>${orderId}</b></p>` +
-        `<p>Return to the <a href="/">proof page</a> and press "Capture + read back".</p>`,
+        `<p>Return to the <a href="/proof.html">proof page</a> and press "Capture + read back".</p>`,
         'text/html; charset=utf-8');
     }
 
@@ -226,6 +237,44 @@ const server = createServer(async (req, res) => {
       return send(res, 200, hold);
     }
 
+    // ---- Console feed + demo seed (the working product's front door) ----
+    if (req.method === 'GET' && url.pathname === '/api/overview') {
+      const registry = mandateRegistry();
+      const engine = walletEngine();
+      return send(res, 200, {
+        configured: isConfigured(cfg),
+        agents: identity.listAgents(),
+        passports: identity.listPassports(),
+        mandates: registry.list().map((record) => ({
+          ...record,
+          validation: registry.validate(record.payload.id),
+          guideline: renderGuideline(record.payload),
+        })),
+        wallets: engine.listWallets(),
+        holds: engine.pendingHolds(),
+        jobs: engine.listJobs(),
+        audit: { verify: audit.verify(), count: audit.entries.length, recent: audit.entries.slice(-12).reverse() },
+      });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/demo/seed') {
+      if (demoSeed) return send(res, 200, { seeded: true, already: true, ...demoSeed });
+      const registry = mandateRegistry();
+      const engine = walletEngine();
+      const agent = identity.registerAgent({ ownerId: 'demo-owner', name: 'Concierge' });
+      audit.append({ type: 'agent.registered', agentId: agent.id, ownerId: agent.ownerId });
+      const passport = identity.issuePassport({ ownerId: 'demo-owner', tier: 'MEMBER' });
+      audit.append({ type: 'passport.issued', passportId: passport.id, ownerId: passport.ownerId, tier: passport.tier });
+      const text = 'My concierge may book port tours and cafes, at most $50 at a time and $150 a day, only at Harbor Tours and Port Cafe, until New Year. Anything above $30 without asking is too much.';
+      const fields = draftToMandateFields(parseGuideline(text).draft, { ownerId: 'demo-owner', agentId: agent.id, passportId: passport.id });
+      const signed = registry.issue(fields);
+      audit.append({ type: 'mandate.issued', mandateId: signed.payload.id, ownerId: 'demo-owner', agentId: agent.id, via: 'demo-seed' });
+      const wallet = engine.createWallet({ agentId: agent.id, mandateId: signed.payload.id, operatingCapCents: 20000, liveMode: true, openingBalanceCents: 20000 });
+      const job = engine.createJob({ agentId: agent.id, title: 'Shore-excursion bookings', amountCents: 1200 });
+      const held = engine.spend(agent.id, { amountCents: 4000, merchant: 'Harbor Tours' });
+      demoSeed = { agentId: agent.id, passportId: passport.id, mandateId: signed.payload.id, walletId: wallet.id, jobId: job.id, holdId: held.holdId || null };
+      return send(res, 201, { seeded: true, ...demoSeed });
+    }
+
     // Webhook receiver: verify the signature with PayPal before trusting it
     if (req.method === 'POST' && url.pathname === '/api/webhooks') {
       const event = await jsonBody(req);
@@ -247,5 +296,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(cfg.port, () => {
-  console.log(`PayPortal Phase 1 proof server on http://localhost:${cfg.port} (configured: ${isConfigured(cfg)})`);
+  console.log(`PayPortal server on http://localhost:${cfg.port} (PayPal configured: ${isConfigured(cfg)}) — app at /, proof at /proof.html`);
 });
