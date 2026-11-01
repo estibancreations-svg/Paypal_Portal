@@ -12,6 +12,8 @@ import { MandateRegistry } from './mandates.js';
 import { AuditChain } from './audit.js';
 import { IdentityRegistry } from './identity.js';
 import { WalletEngine } from './wallets.js';
+import { RiskService } from './risk.js';
+import { parseGuideline, draftToMandateFields, renderGuideline } from './guidelines.js';
 
 loadDotEnv();
 const cfg = getConfig();
@@ -26,7 +28,7 @@ function mandateRegistry() {
   }
   return mandates;
 }
-const wallets = mandates ? new WalletEngine({ mandates, audit }) : null;
+const wallets = mandates ? new WalletEngine({ mandates, audit, risk: new RiskService() }) : null;
 function walletEngine() {
   if (!wallets) {
     const err = new Error('Wallets require MANDATE_SIGNING_SECRET in the server .env.');
@@ -195,6 +197,33 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && deliverMatch) {
       const result = walletEngine().verifyDelivery(deliverMatch[1]);
       return send(res, 200, { job: result.job, balanceCents: result.balanceCents, sweep: result.sweep });
+    }
+
+    // ---- Phase 4: guidelines generator + approval queue ----
+    if (req.method === 'POST' && url.pathname === '/api/guidelines/draft') {
+      const { text } = await jsonBody(req);
+      return send(res, 200, parseGuideline(text || ''));
+    }
+    if (req.method === 'POST' && url.pathname === '/api/guidelines/sign') {
+      const { text, draft, ownerId, agentId, passportId } = await jsonBody(req);
+      const parsed = draft || parseGuideline(text || '').draft;
+      const fields = draftToMandateFields(parsed, { ownerId, agentId, passportId });
+      const signed = mandateRegistry().issue(fields);
+      audit.append({ type: 'mandate.issued', mandateId: signed.payload.id, ownerId, agentId, via: 'guideline' });
+      return send(res, 201, { ...signed, guideline: renderGuideline(signed.payload) });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/holds') {
+      return send(res, 200, { pending: walletEngine().pendingHolds() });
+    }
+    const approveHoldMatch = url.pathname.match(/^\/api\/holds\/([0-9a-f-]{36})\/approve$/);
+    if (req.method === 'POST' && approveHoldMatch) {
+      const result = walletEngine().approveHold(approveHoldMatch[1]);
+      return send(res, 200, result);
+    }
+    const denyHoldMatch = url.pathname.match(/^\/api\/holds\/([0-9a-f-]{36})\/deny$/);
+    if (req.method === 'POST' && denyHoldMatch) {
+      const hold = walletEngine().denyHold(denyHoldMatch[1]);
+      return send(res, 200, hold);
     }
 
     // Webhook receiver: verify the signature with PayPal before trusting it

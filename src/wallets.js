@@ -13,12 +13,14 @@
 import { randomUUID } from 'node:crypto';
 
 export class WalletEngine {
-  constructor({ mandates, audit = null }) {
+  constructor({ mandates, audit = null, risk = null }) {
     if (!mandates) throw new Error('WalletEngine requires the mandate registry');
     this.mandates = mandates;
     this.audit = audit;
+    this.risk = risk;
     this.wallets = new Map(); // agentId -> wallet
     this.jobs = new Map();    // jobId -> job
+    this.holds = new Map();   // holdId -> { id, agentId, proposal, reasons, status }
     this.ledger = [];         // { id, agentId, type: EARN|SPEND|SWEEP, amountCents, at, ref }
     this.ownerSweeps = [];    // { ownerId, agentId, amountCents, at }
     this.pointsByAgent = new Map(); // agentId -> points earned for the owner (Phase 6 hook)
@@ -61,7 +63,17 @@ export class WalletEngine {
       .reduce((sum, e) => sum + e.amountCents, 0);
   }
 
-  // The spend path. Gate first, balance second, debit last.
+  // Merchants this wallet has already paid — the risk service's "known" set.
+  knownMerchants(agentId) {
+    const seen = new Set();
+    for (const e of this.ledger) {
+      if (e.agentId === agentId && e.type === 'SPEND' && e.ref) seen.add(e.ref);
+    }
+    return [...seen];
+  }
+
+  // The spend path. Gate first, risk second, balance third, debit last.
+  // A borderline proposal is HELD for the owner — no debit until approved.
   spend(agentId, proposal) {
     const wallet = this.wallets.get(agentId);
     if (!wallet) return { decision: 'block', reasons: ['wallet not found'] };
@@ -70,15 +82,70 @@ export class WalletEngine {
       this.log('payment.blocked', { agentId, amountCents: proposal?.amountCents, reasons: gate.reasons });
       return gate;
     }
+    if (this.risk) {
+      const record = this.mandates.get(wallet.mandateId);
+      const verdict = this.risk.evaluate(record.payload, proposal, { knownMerchants: this.knownMerchants(agentId) });
+      if (verdict.decision === 'hold') {
+        if (proposal.amountCents > wallet.balanceCents) {
+          const reasons = [`insufficient operating funds: wallet holds ${wallet.balanceCents}, needs ${proposal.amountCents} — the agent stops at zero`];
+          this.log('payment.blocked', { agentId, amountCents: proposal.amountCents, reasons });
+          return { decision: 'block', reasons };
+        }
+        const hold = { id: randomUUID(), agentId, proposal, reasons: verdict.reasons, status: 'PENDING', createdAt: new Date().toISOString(), decidedAt: null };
+        this.holds.set(hold.id, hold);
+        this.log('payment.held', { agentId, holdId: hold.id, amountCents: proposal.amountCents, reasons: verdict.reasons });
+        return { decision: 'hold', holdId: hold.id, reasons: verdict.reasons };
+      }
+    }
+    return this.debit(wallet, proposal);
+  }
+
+  debit(wallet, proposal) {
     if (proposal.amountCents > wallet.balanceCents) {
       const reasons = [`insufficient operating funds: wallet holds ${wallet.balanceCents}, needs ${proposal.amountCents} — the agent stops at zero`];
-      this.log('payment.blocked', { agentId, amountCents: proposal.amountCents, reasons });
+      this.log('payment.blocked', { agentId: wallet.agentId, amountCents: proposal.amountCents, reasons });
       return { decision: 'block', reasons };
     }
     wallet.balanceCents -= proposal.amountCents;
-    this.addLedger(agentId, 'SPEND', proposal.amountCents, proposal.merchant || proposal.category || '');
-    this.log('agent.spent', { agentId, amountCents: proposal.amountCents, balanceCents: wallet.balanceCents });
+    this.addLedger(wallet.agentId, 'SPEND', proposal.amountCents, proposal.merchant || proposal.category || '');
+    this.log('agent.spent', { agentId: wallet.agentId, amountCents: proposal.amountCents, balanceCents: wallet.balanceCents });
     return { decision: 'pass', reasons: [], balanceCents: wallet.balanceCents };
+  }
+
+  // The owner's decision on a held proposal. Approval re-runs the mandate
+  // gate at execution time — a mandate revoked while the proposal waited
+  // still blocks it. Denial is final.
+  approveHold(holdId) {
+    const hold = this.holds.get(holdId);
+    if (!hold) throw new Error('hold not found');
+    if (hold.status !== 'PENDING') throw new Error(`hold is ${hold.status}, not PENDING`);
+    const wallet = this.wallets.get(hold.agentId);
+    const gate = this.mandates.authorize(wallet.mandateId, hold.proposal, { spentTodayCents: this.spentTodayCents(wallet.mandateId) });
+    if (gate.decision !== 'pass') {
+      hold.status = 'BLOCKED';
+      hold.decidedAt = new Date().toISOString();
+      this.log('payment.blocked', { agentId: hold.agentId, holdId, amountCents: hold.proposal.amountCents, reasons: gate.reasons });
+      return { decision: 'block', reasons: gate.reasons, hold };
+    }
+    hold.status = 'APPROVED';
+    hold.decidedAt = new Date().toISOString();
+    this.log('payment.approved', { agentId: hold.agentId, holdId, amountCents: hold.proposal.amountCents });
+    const result = this.debit(wallet, hold.proposal);
+    return { ...result, hold };
+  }
+
+  denyHold(holdId) {
+    const hold = this.holds.get(holdId);
+    if (!hold) throw new Error('hold not found');
+    if (hold.status !== 'PENDING') throw new Error(`hold is ${hold.status}, not PENDING`);
+    hold.status = 'DENIED';
+    hold.decidedAt = new Date().toISOString();
+    this.log('payment.denied', { agentId: hold.agentId, holdId, amountCents: hold.proposal.amountCents });
+    return hold;
+  }
+
+  pendingHolds() {
+    return [...this.holds.values()].filter((h) => h.status === 'PENDING');
   }
 
   // ---- Earning: jobs are held until delivery is verified ----

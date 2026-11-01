@@ -17,7 +17,7 @@ export function createMandate(fields, secret) {
     ownerId, agentId, passportId, purpose,
     perPurchaseCapCents, dailyCapCents,
     currency = 'USD', allowlist = [], expiresAt, tier = 'MEMBER',
-    sweepThresholdCents = null,
+    sweepThresholdCents = null, everydayThresholdCents = null,
   } = fields;
   if (!ownerId || !agentId || !passportId) throw new Error('mandate requires ownerId, agentId, passportId');
   if (!Number.isInteger(perPurchaseCapCents) || perPurchaseCapCents < 0) throw new Error('perPurchaseCapCents must be a non-negative integer (cents)');
@@ -32,6 +32,7 @@ export function createMandate(fields, secret) {
     allowlist: [...allowlist].sort(),
     expiresAt, tier,
     sweepThresholdCents,
+    everydayThresholdCents,
     issuedAt: new Date().toISOString(),
   };
   return { payload, signature: sign(payload, secret) };
