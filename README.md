@@ -81,3 +81,7 @@ MIT — see `LICENSE`.
 Estiban Creations selected **Render** for application hosting. Existing Supabase projects continue to provide PostgreSQL, authentication and storage where applicable. This repository's placement is **Existing Render service**. Render inventory already shows this repository on a main-tracking Node web service. Confirm actual health and ownership before any future changes.
 
 The GrantOS review verified 27 failed Vercel preview checks across nine commit SHAs, a temporary successful preview checkpoint and a separate production availability block. See the [repository mapping and evidence](docs/RENDER-MIGRATION-MAP.md) for context and release requirements.
+
+### Migration verification · 2026-11-22T21:35:36-06:00
+
+**Existing Render service. Health verified.** See the [timestamped deployment mapping](docs/RENDER-MIGRATION-MAP.md) for evidence and remaining checks.
